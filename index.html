@@ -1,318 +1,302 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Wordpad at Home</title>
-  <style>
-    body, button, select, input {
-      font-family: -apple-system, "Segoe UI", Tahoma, Ubuntu, Roboto, sans-serif;
-    }
-    body {
-      margin: 0;
-    }
-    /* Language selector (fixed at top-right) */
-    #languageSelector {
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      z-index: 1100;
-      background: #fff;
-      padding: 5px;
-      border: 1px solid #ccc;
-      font-size: 14px;
-    }
-    /* Toolbar iframe */
-    #toolbar {
-      width: 100%;
-      height: 60px;
-      border: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      background: white;
-      z-index: 1000;
-      overflow: hidden;
-      /* Reserve 160px on the right so the toolbar doesn't extend under the selector */
-      padding-right: 160px;
-    }
-    /* Editor area */
-    #editor {
-      width: 90vw;
-      height: calc(90vw * 1.414); /* ~√2 ratio */
-      border: 1px solid #ccc;
-      padding: 10px;
-      overflow-y: auto;
-      text-align: left;
-      margin: 70px auto 0;
-      font-family: serif; /* Use a serif font inside the editor */
-    }
-  </style>
-</head>
-<body>
-
-  <!-- Manual Language Selector -->
-  <div id="languageSelector">
-    <label for="languageSelect">Language: </label>
-    <select id="languageSelect">
-      <option value="en">English</option>
-      <option value="tr">Türkçe</option>
-    </select>
-  </div>
-
-  <!-- Toolbar iframe -->
-  <iframe id="toolbar"></iframe>
-
-  <!-- Editor / Textbox -->
-  <div id="editor" contenteditable="true"></div>
-
-  <!-- Main Application Script -->
-  <script>
-    /************************************************
-     * 1) Markdown → HTML for WYSIWYG Display
-     ***********************************************/
-    function extendedMarkdownToHtml(markdown) {
-      let html = markdown;
-
-      // Underline markers: [u]text[/u]
-      html = html.replace(/\[u\](.*?)\[\/u\]/gs, '<u>$1</u>');
-
-      // Custom fonts: [font=Arial]text[/font]
-      html = html.replace(/\[font=([^\]]+)\](.*?)\[\/font\]/gs, '<span style="font-family:$1">$2</span>');
-
-      // Fenced code blocks: ``` code ```
-      html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-
-      // Inline code: `code`
-      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-      // Headings
-      html = html.replace(/^### (.*)$/gm, '<h3>$1</h3>');
-      html = html.replace(/^## (.*)$/gm, '<h2>$1</h2>');
-      html = html.replace(/^# (.*)$/gm, '<h1>$1</h1>');
-
-      // Bold
-      html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-      // Italic
-      html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
-
-      // Blockquotes
-      html = html.replace(/^> (.*)$/gm, '<blockquote>$1</blockquote>');
-
-      // Horizontal rule
-      html = html.replace(/\n---\n/g, '<hr>');
-
-      // Links: [text](url)
-      html = html.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2">$1</a>');
-
-      // 1) Recognize numbered lines: e.g. "1. text" or "1) text"
-      html = html.replace(/^(\d+)([.)])\s+(.*)$/gm, '<li data-ordered="true">$3</li>');
-      // Wrap consecutive <li data-ordered="true"> in <ol>
-      html = html.replace(/((<li data-ordered="true">.*?<\/li>\n?)+)/g, '<ol>$1</ol>');
-      // Remove the data-ordered attribute (not needed for display)
-      html = html.replace(/<li data-ordered="true">/g, '<li>');
-
-      // 2) Recognize bullet lines: e.g. "- text", "* text", "+ text"
-      html = html.replace(/^[-*+] (.*)$/gm, '<li>$1</li>');
-      // Wrap consecutive <li> in <ul> (only those not inside <ol>)
-      html = html.replace(/(<li>(?!.*<\/ol>).+?<\/li>\n?)+/g, function(m) {
-        if (m.includes('<ol>') || m.includes('</ol>')) {
-          return m; // already inside an <ol>, skip
-        }
-        return `<ul>${m}</ul>`;
-      });
-
-      // Split on double newlines => paragraph blocks
-      const blocks = html.split(/\n\s*\n/);
-
-      // Convert single newlines to <br>, then wrap in <p> if not a known block
-      html = blocks
-        .map(block => {
-          const trimmed = block.trim();
-          if (!trimmed) return '';
-
-          // If it starts with a block-level element, return as-is
-          if (/^(<h\d|<ul|<ol|<blockquote|<pre|<hr|<table)/i.test(trimmed)) {
-            return trimmed;
-          } else {
-            // Convert single newlines => <br>
-            const withBr = trimmed.replace(/\n+/g, '<br>\n');
-            return `<p>${withBr}</p>`;
-          }
-        })
-        .join('\n');
-
-      return html;
-    }
-
-    /************************************************
-     * 2) HTML → Markdown (for Saving)
-     ***********************************************/
-    function htmlToMarkdown(html) {
-      // We'll do a two-step approach:
-      // - Convert <ol> & <ul> blocks to lines
-      // - Then handle the rest of inline tags
-
-      // 2A) Convert <ol> to numbered lines "1. item", "2. item", etc.
-      html = html.replace(/<ol>([\s\S]*?)<\/ol>/gi, function(_, inner) {
-        let i = 1;
-        const lines = inner.replace(/<li>([\s\S]*?)<\/li>/gi, function(_, liContent) {
-          return (i++) + ". " + liContent + "\n";
-        });
-        return "\n" + lines + "\n";
-      });
-
-      // 2B) Convert <ul> to bullet lines "- item"
-      html = html.replace(/<ul>([\s\S]*?)<\/ul>/gi, function(_, inner) {
-        return "\n" + inner.replace(/<li>([\s\S]*?)<\/li>/gi, '- $1\n') + "\n";
-      });
-
-      // Now the rest of inline tags:
-      let text = html;
-
-      // <br> => \n
-      text = text.replace(/<br\s*\/?>/gi, "\n");
-
-      // Bold => ** **
-      text = text.replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**');
-
-      // Italic => * *
-      text = text.replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*');
-
-      // Underline => [u][/u]
-      text = text.replace(/<u>(.*?)<\/u>/gi, '[u]$1[/u]');
-
-      // h1, h2, h3 => #, ##, ###
-      text = text.replace(/<h1>(.*?)<\/h1>/gi, '# $1\n\n');
-      text = text.replace(/<h2>(.*?)<\/h2>/gi, '## $1\n\n');
-      text = text.replace(/<h3>(.*?)<\/h3>/gi, '### $1\n\n');
-
-      // Blockquote
-      text = text.replace(/<blockquote>([\s\S]*?)<\/blockquote>/gi, (match, content) => {
-        return content
-          .split(/\n/)
-          .map(line => '> ' + line.trim())
-          .join('\n') + "\n\n";
-      });
-
-      // Horizontal rule
-      text = text.replace(/<hr\s*\/?>/gi, '\n---\n');
-
-      // Inline code => `...`
-      text = text.replace(/<code>(.*?)<\/code>/gi, '`$1`');
-
-      // Code blocks => ```
-      text = text.replace(/<pre><code>([\s\S]*?)<\/code><\/pre>/gi,
-        (_, codeBlock) => `\n\`\`\`\n${codeBlock}\n\`\`\`\n\n`
-      );
-
-      // Links: <a href="url">text</a>
-      text = text.replace(/<a\s+href="(.*?)">(.*?)<\/a>/gi, '[$2]($1)');
-
-      // Custom font: <span style="font-family:foo">...</span>
-      text = text.replace(
-        /<span\s+style="[^"]*font-family\s*:\s*([^;"]+)[^"]*">(.*?)<\/span>/gi,
-        '[font=$1]$2[/font]'
-      );
-
-      // <p> => double newline
-      text = text.replace(/<p>(.*?)<\/p>/gi, '$1\n\n');
-
-      // Leftover <li> => '- item' (should be none if <ol>/<ul> was processed, but just in case)
-      text = text.replace(/<li>(.*?)<\/li>/gi, '- $1\n');
-
-      // Remove leftover tags
-      text = text.replace(/<[^>]+>/g, '');
-
-      // Normalize multiple blank lines => max 2
-      text = text.replace(/\n\s*\n\s*\n+/g, '\n\n');
-
-      return text.trim();
-    }
-
-    /************************************************
-     * 3) Basic CommonMark → HTML
-     ***********************************************/
-    function markdownToHtml(markdown) {
-      return extendedMarkdownToHtml(markdown);
-    }
-
-    /************************************************
-     * 4) Internationalization
-     ***********************************************/
-    let lang = (navigator.language || navigator.userLanguage).toLowerCase().startsWith('tr') ? 'tr' : 'en';
-
-    const translations = {
-      en: {
-        bold: 'Bold',
-        italic: 'Italic',
-        underline: 'Underline',
-        left: 'Left',
-        center: 'Center',
-        right: 'Right',
-        numberedList: 'Numbered List',
-        bulletList: 'Bullet List',
-        pickFont: 'Pick font',
-        fontOptions: {
-          arial: 'Arial',
-          courier: 'Courier New',
-          times: 'Times New Roman'
-        },
-        customFontPlaceholder: 'Enter font name',
-        more: 'More...',
-        heading1: 'Heading 1',
-        heading2: 'Heading 2',
-        heading3: 'Heading 3',
-        blockquote: 'Blockquote',
-        hr: 'Horizontal Rule',
-        inlineCode: 'Inline Code',
-        codeBlock: 'Code Block',
-        link: 'Link',
-        save: 'Save',
-        print: 'Print',
-		normaltext: 'Normal Text'
-      },
-      tr: {
-        bold: 'Kalın',
-        italic: 'İtalik',
-        underline: 'Altı Çizili',
-        left: 'Sola Hizala',
-        center: 'Ortala',
-        right: 'Sağa Hizala',
-        numberedList: 'Numaralı Liste',
-        bulletList: 'Madde İşaretli Liste',
-        pickFont: 'Yazı Tipi Seç',
-        fontOptions: {
-          arial: 'Arial',
-          courier: 'Courier New',
-          times: 'Times New Roman'
-        },
-        customFontPlaceholder: 'Yazı tipi adı girin',
-        more: 'Daha Fazla...',
-        heading1: 'Başlık 1',
-        heading2: 'Başlık 2',
-        heading3: 'Başlık 3',
-        blockquote: 'Alıntı',
-        hr: 'Yatay Çizgi',
-        inlineCode: 'Satır İçi Kod',
-        codeBlock: 'Kod Bloğu',
-        link: 'Bağlantı',
-        save: 'Kaydet',
-        print: 'Yazdır',
-		normaltext: 'Normal Metin'
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wordpad at Home</title>
+    <style>
+      body,
+      button,
+      select,
+      input {
+        font-family: -apple-system, "Segoe UI", Tahoma, Ubuntu, Roboto, sans-serif;
       }
-    };
 
-    document.getElementById('languageSelect').value = lang;
+      body {
+        margin: 0;
+      }
 
-    function loadToolbar() {
-  const t = translations[lang];
-  const toolbarHTML = `
-    <!DOCTYPE html>
-    <html lang="${lang}">
-    <head>
-      <meta charset="UTF-8">
-      <style>
+      /* Language selector (fixed at top-right) */
+      #languageSelector {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        z-index: 1100;
+        background: #fff;
+        padding: 5px;
+        border: 1px solid #ccc;
+        font-size: 14px;
+      }
+
+      /* Toolbar iframe */
+      #toolbar {
+        width: 100%;
+        height: 60px;
+        border: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        background: white;
+        z-index: 1000;
+        overflow: hidden;
+        /* Reserve 160px on the right so the toolbar doesn't extend under the selector */
+        padding-right: 160px;
+      }
+
+      /* Editor area */
+      #editor {
+        width: 90vw;
+        height: calc(90vw * 1.414);
+        /* ~√2 ratio */
+        border: 1px solid #ccc;
+        padding: 10px;
+        overflow-y: auto;
+        text-align: left;
+        margin: 70px auto 0;
+        font-family: serif;
+        /* Use a serif font inside the editor */
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Manual Language Selector -->
+    <div id="languageSelector">
+      <label for="languageSelect">Language: </label>
+      <select id="languageSelect">
+        <option value="en">English</option>
+        <option value="tr">Türkçe</option>
+      </select>
+    </div>
+    <!-- Toolbar iframe -->
+    <iframe id="toolbar"></iframe>
+    <!-- Editor / Textbox -->
+    <div id="editor" contenteditable="true"></div>
+    <!-- Main Application Script -->
+    <script>
+      /************************************************
+       * 1) Markdown → HTML for WYSIWYG Display
+       ***********************************************/
+      function extendedMarkdownToHtml(markdown) {
+        // 1. Protect code blocks by extracting them into placeholders.
+        const codeBlocks = [];
+        markdown = markdown.replace(/```([\s\S]*?)```/g, function(match, p1) {
+          codeBlocks.push(p1);
+          return `@@CODEBLOCK${codeBlocks.length - 1}@@`;
+        });
+        // 2. Protect inline code similarly.
+        const inlineCodes = [];
+        markdown = markdown.replace(/`([^`]+)`/g, function(match, p1) {
+          inlineCodes.push(p1);
+          return `@@INLINECODE${inlineCodes.length - 1}@@`;
+        });
+        // 3. Process the rest of the markdown.
+        let html = markdown;
+        // Custom extensions (do these first)
+        html = html.replace(/\[u\](.*?)\[\/u\]/gs, ' < u > $1 < /u>');
+            html = html.replace(/\[font=([^\]]+)\](.*?)\[\/font\]/gs, ' < span style = "font-family:$1" > $2 < /span>');
+              // Headings
+              html = html.replace(/^### (.*)$/gm, ' < h3 > $1 < /h3>');
+                html = html.replace(/^## (.*)$/gm, ' < h2 > $1 < /h2>');
+                  html = html.replace(/^# (.*)$/gm, ' < h1 > $1 < /h1>');
+                    // Bold & Italic (process bold first)
+                    html = html.replace(/\*\*(.*?)\*\*/g, ' < strong > $1 < /strong>');
+                      html = html.replace(/\*(.*?)\*/g, ' < em > $1 < /em>');
+                        // Blockquotes – allow an optional space after ">"
+                        html = html.replace(/^>\s?(.*)$/gm, ' < blockquote > $1 < /blockquote>');
+                          // Horizontal rules – match a full line of three or more dashes
+                          html = html.replace(/^\s*---+\s*$/gm, ' < hr > ');
+                            // Links
+                            html = html.replace(/\[(.*?)\]\((.*?)\)/g, ' < a href = "$2" > $1 < /a>');
+                              // Numbered lists: convert "1. text" or "1) text" to list items and wrap in 
+                              < ol > html = html.replace(/^(\d+)([.)])\s+(.*)$/gm, ' < li data - ordered = "true" > $3 < /li>');
+                                html = html.replace(/(( < li data - ordered = "true" > .* ? < \/li>\n?)+)/g, ' < ol > $1 < /ol>');
+                                  html = html.replace(/ < li data - ordered = "true" > /g, ' < li > ');
+                                    // Bullet lists: convert "- text", "* text", or "+ text" to 
+                                    < li > and wrap consecutive ones in < ul > html = html.replace(/^[-*+] (.*)$/gm, ' < li > $1 < /li>');
+                                      html = html.replace(/( < li > ( ? !.* < \/ol>).+?<\/li>\n?)+/g, function(m) {
+                                            if (m.includes(' < ol > ') || m.includes(' < /ol>')) {
+                                                return m; // already inside an ordered list
+                                              }
+                                              return `
+											<ul>${m}</ul>`;
+                                            });
+                                          // Paragraphs: split on double newlines and wrap non–block-level content in 
+                                          < p > tags.const blocks = html.split(/\n\s*\n/); html = blocks.map(block => {
+                                            const trimmed = block.trim();
+                                            if (!trimmed) return '';
+                                            if (/^( < h\ d | < ul | < ol | < blockquote | < pre | < hr | < table) /i.test(trimmed)) {
+                                            return trimmed;
+                                          } else {
+                                            const withBr = trimmed.replace(/\n+/g, ' < br > \n ');
+                                              return `
+																				<p>${withBr}</p>`;
+                                            }
+                                          }).join('\n');
+                                          // 4. Reinsert the protected inline code segments.
+                                          html = html.replace(/@@INLINECODE(\d+)@@/g, function(match, index) {
+                                            return `
+																				<code>${inlineCodes[index]}</code>`;
+                                          });
+                                          // 5. Reinsert the protected code blocks.
+                                          html = html.replace(/@@CODEBLOCK(\d+)@@/g, function(match, index) {
+                                            return `
+																				<pre>
+																					<code>${codeBlocks[index]}</code>
+																				</pre>`;
+                                          });
+                                          return html;
+                                        }
+                                        /************************************************
+                                         * 2) HTML → Markdown (for Saving)
+                                         ***********************************************/
+                                        function htmlToMarkdown(html) {
+                                          // We'll do a two-step approach:
+                                          // - Convert 
+                                          < ol > & < ul > blocks to lines
+                                            // - Then handle the rest of inline tags
+                                            // 2A) Convert 
+                                            < ol > to numbered lines "1. item", "2. item", etc.
+                                          html = html.replace(/ < ol > ([\s\ S] * ? ) < \/ol>/gi, function(_, inner) {
+                                            let i = 1;
+                                            const lines = inner.replace(/ < li > ([\s\ S] * ? ) < \/li>/gi, function(_, liContent) {
+                                              return (i++) + ". " + liContent + "\n";
+                                            });
+                                            return "\n" + lines + "\n";
+                                          });
+                                          // 2B) Convert 
+                                          < ul > to bullet lines "- item"
+                                          html = html.replace(/ < ul > ([\s\ S] * ? ) < \/ul>/gi, function(_, inner) {
+                                            return "\n" + inner.replace(/ < li > ([\s\ S] * ? ) < \/li>/gi, '- $1\n') + "\n";
+                                          });
+                                          // Now the rest of inline tags:
+                                          let text = html;
+                                          // 
+                                          < br > => \n
+                                          text = text.replace(/ < br\ s * \/?>/gi, "\n");
+                                          // Bold => ** **
+                                          text = text.replace(/<(strong|b)>(.*?)<\/\1>/gi, '**$2**');
+                                          // Italic => * *
+                                          text = text.replace(/<(em|i)>(.*?)<\/\1>/gi, '*$2*');
+                                          // Underline => [u][/u]
+                                          text = text.replace(/ < u > (.* ? ) < \/u>/gi, '[u]$1[/u]');
+                                          // h1, h2, h3 => #, ##, ###
+                                          text = text.replace(/ < h1 > (.* ? ) < \/h1>/gi, '# $1\n\n');
+                                          text = text.replace(/ < h2 > (.* ? ) < \/h2>/gi, '## $1\n\n');
+                                          text = text.replace(/ < h3 > (.* ? ) < \/h3>/gi, '### $1\n\n');
+                                          // Blockquote
+                                          text = text.replace(/ < blockquote > ([\s\ S] * ? ) < \/blockquote>/gi, (match, content) => {
+                                            return content.split(/\n/).map(line => '> ' + line.trim()).join('\n') + "\n\n";
+                                          });
+                                          // Horizontal rule
+                                          text = text.replace(/ < hr\ s * \/?>/gi, '\n---\n');
+                                          // Inline code => `...`
+                                          text = text.replace(/ < code > (.* ? ) < \/code>/gi, '`$1`');
+                                          // Code blocks => ```
+                                          text = text.replace(/ < pre > < code > ([\s\ S] * ? ) < \/code><\/pre>/gi,
+                                            (_, codeBlock) => `\n\`\`\`\n${codeBlock}\n\`\`\`\n\n`);
+                                          // Links: 
+                                          < a href = "url" > text < /a>
+                                          text = text.replace(/ < a\ s + href = "(.*?)" > (.* ? ) < \/a>/gi, '[$2]($1)');
+                                          // Custom font: 
+                                          < span style = "font-family:foo" > ... < /span>
+                                          text = text.replace(/ < span\ s + style = "[^"] * font - family\ s * : \s * ([ ^ ;
+                                              "]+)[^"
+                                            ] * ">(.*?)<\/span>/gi,
+                                            '[font=$1]$2[/font]');
+                                          // 
+                                          < p > => double newline
+                                          text = text.replace(/ < p > (.* ? ) < \/p>/gi, '$1\n\n');
+                                          // Leftover 
+                                          < li > => '- item'(should be none
+                                            if <ol > / < ul > was processed, but just in
+                                            case)
+                                          text = text.replace(/ < li > (.* ? ) < \/li>/gi, '- $1\n');
+                                          // Remove leftover tags
+                                          text = text.replace(/<[^>]+>/g, '');
+                                          // Normalize multiple blank lines => max 2
+                                          text = text.replace(/\n\s*\n\s*\n+/g, '\n\n');
+                                          return text.trim();
+                                        }
+                                        /************************************************
+                                         * 3) Basic CommonMark → HTML
+                                         ***********************************************/
+                                        function markdownToHtml(markdown) {
+                                          return extendedMarkdownToHtml(markdown);
+                                        }
+                                        /************************************************
+                                         * 4) Internationalization
+                                         ***********************************************/
+                                        let lang = (navigator.language || navigator.userLanguage).toLowerCase().startsWith('tr') ? 'tr' : 'en';
+                                        const translations = {
+                                          en: {
+                                            bold: 'Bold',
+                                            italic: 'Italic',
+                                            underline: 'Underline',
+                                            left: 'Left',
+                                            center: 'Center',
+                                            right: 'Right',
+                                            numberedList: 'Numbered List',
+                                            bulletList: 'Bullet List',
+                                            pickFont: 'Pick font',
+                                            fontOptions: {
+                                              arial: 'Arial',
+                                              courier: 'Courier New',
+                                              times: 'Times New Roman'
+                                            },
+                                            customFontPlaceholder: 'Enter font name',
+                                            more: 'More...',
+                                            heading1: 'Heading 1',
+                                            heading2: 'Heading 2',
+                                            heading3: 'Heading 3',
+                                            blockquote: 'Blockquote',
+                                            hr: 'Horizontal Rule',
+                                            inlineCode: 'Inline Code',
+                                            codeBlock: 'Code Block',
+                                            link: 'Link',
+                                            save: 'Save',
+                                            print: 'Print',
+                                            normaltext: 'Normal Text'
+                                          },
+                                          tr: {
+                                            bold: 'Kalın',
+                                            italic: 'İtalik',
+                                            underline: 'Altı Çizili',
+                                            left: 'Sola Hizala',
+                                            center: 'Ortala',
+                                            right: 'Sağa Hizala',
+                                            numberedList: 'Numaralı Liste',
+                                            bulletList: 'Madde İşaretli Liste',
+                                            pickFont: 'Yazı Tipi Seç',
+                                            fontOptions: {
+                                              arial: 'Arial',
+                                              courier: 'Courier New',
+                                              times: 'Times New Roman'
+                                            },
+                                            customFontPlaceholder: 'Yazı tipi adı girin',
+                                            more: 'Daha Fazla...',
+                                            heading1: 'Başlık 1',
+                                            heading2: 'Başlık 2',
+                                            heading3: 'Başlık 3',
+                                            blockquote: 'Alıntı',
+                                            hr: 'Yatay Çizgi',
+                                            inlineCode: 'Satır İçi Kod',
+                                            codeBlock: 'Kod Bloğu',
+                                            link: 'Bağlantı',
+                                            save: 'Kaydet',
+                                            print: 'Yazdır',
+                                            normaltext: 'Normal Metin'
+                                          }
+                                        }; document.getElementById('languageSelect').value = lang;
+
+                                        function loadToolbar() {
+                                          const t = translations[lang];
+                                          const toolbarHTML = `
+    
+																																															<!DOCTYPE html>
+																																															<html lang="${lang}">
+																																																<head>
+																																																	<meta charset="UTF-8">
+																																																		<style>
         body, button, select, input {
           font-family: -apple-system, "Segoe UI", Tahoma, Ubuntu, Roboto, sans-serif;
         }
@@ -330,280 +314,269 @@
           font-size: 12px;
         }
       </style>
-    </head>
-    <body>
-      <!-- Font selection -->
-      <select id="fontPicker" onchange="parent.changeFont(this.value)">
-        <option value="">${t.pickFont}</option>
-        <option value="Arial">${t.fontOptions.arial}</option>
-        <option value="Courier New">${t.fontOptions.courier}</option>
-        <option value="Times New Roman">${t.fontOptions.times}</option>
-      </select>
-      <input
+																																																	</head>
+																																																	<body>
+																																																		<!-- Font selection -->
+																																																		<select id="fontPicker" onchange="parent.changeFont(this.value)">
+																																																			<option value="">${t.pickFont}</option>
+																																																			<option value="Arial">${t.fontOptions.arial}</option>
+																																																			<option value="Courier New">${t.fontOptions.courier}</option>
+																																																			<option value="Times New Roman">${t.fontOptions.times}</option>
+																																																		</select>
+																																																		<input
         type="text"
         id="customFont"
         placeholder="${t.customFontPlaceholder}"
         onkeydown="if(event.key === 'Enter'){ event.preventDefault(); parent.changeFont(this.value); }"
       >
-      <!-- Formatting buttons -->
-      <button onclick="parent.execCmd('bold')"><strong>${t.bold}</strong></button>
-      <button onclick="parent.execCmd('italic')"><em>${t.italic}</em></button>
-      <button onclick="parent.execCmd('underline')"><u>${t.underline}</u></button>
-      <button onclick="parent.execCmd('justifyLeft')">${t.left}</button>
-      <button onclick="parent.execCmd('justifyCenter')">${t.center}</button>
-      <button onclick="parent.execCmd('justifyRight')">${t.right}</button>
-      <button onclick="parent.execCmd('insertOrderedList')">${t.numberedList}</button>
-      <button onclick="parent.execCmd('insertUnorderedList')">${t.bulletList}</button>
-      <input type="file" id="fileInput" accept=".md" onchange="parent.openFile(event)">
-      <!-- Dropdown for additional features -->
-      <select
+																																																			<!-- Formatting buttons -->
+																																																			<button onclick="parent.execCmd('bold')">
+																																																				<strong>${t.bold}</strong>
+																																																			</button>
+																																																			<button onclick="parent.execCmd('italic')">
+																																																				<em>${t.italic}</em>
+																																																			</button>
+																																																			<button onclick="parent.execCmd('underline')">
+																																																				<u>${t.underline}</u>
+																																																			</button>
+																																																			<button onclick="parent.execCmd('justifyLeft')">${t.left}</button>
+																																																			<button onclick="parent.execCmd('justifyCenter')">${t.center}</button>
+																																																			<button onclick="parent.execCmd('justifyRight')">${t.right}</button>
+																																																			<button onclick="parent.execCmd('insertOrderedList')">${t.numberedList}</button>
+																																																			<button onclick="parent.execCmd('insertUnorderedList')">${t.bulletList}</button>
+																																																			<input type="file" id="fileInput" accept=".md" onchange="parent.openFile(event)">
+																																																				<!-- Dropdown for additional features -->
+																																																				<select
         id="moreOptions"
         onchange="parent.applyMoreOption(this.value); this.selectedIndex=0;"
       >
-        <option value="">${t.more}</option>
-		<!-- ... in your <select id="moreOptions"> ... -->
-        <option value="p">${t.normaltext}</option>
-        <option value="h1">${t.heading1}</option>
-        <option value="h2">${t.heading2}</option>
-        <option value="h3">${t.heading3}</option>
-        <option value="blockquote">${t.blockquote}</option>
-        <option value="hr">${t.hr}</option>
-        <option value="inlineCode">${t.inlineCode}</option>
-        <option value="codeBlock">${t.codeBlock}</option>
-        <option value="link">${t.link}</option>
-      </select>
-      <button onclick="parent.saveText()">${t.save}</button>
-      <button onclick="parent.printDocument()">${t.print}</button>
-    </body>
-    </html>
+																																																					<option value="">${t.more}</option>
+																																																					<!-- ... in your <select id="moreOptions"> ... -->
+																																																					<option value="p">${t.normaltext}</option>
+																																																					<option value="h1">${t.heading1}</option>
+																																																					<option value="h2">${t.heading2}</option>
+																																																					<option value="h3">${t.heading3}</option>
+																																																					<option value="blockquote">${t.blockquote}</option>
+																																																					<option value="hr">${t.hr}</option>
+																																																					<option value="inlineCode">${t.inlineCode}</option>
+																																																					<option value="codeBlock">${t.codeBlock}</option>
+																																																					<option value="link">${t.link}</option>
+																																																				</select>
+																																																				<button onclick="parent.saveText()">${t.save}</button>
+																																																				<button onclick="parent.printDocument()">${t.print}</button>
+																																																			</body>
+																																																		</html>
   `;
+                                          // Simply assign the template string directly to srcdoc
+                                          document.getElementById('toolbar').srcdoc = toolbarHTML;
+                                        }
+                                        loadToolbar();
+                                        // Change language at runtime
+                                        document.getElementById('languageSelect').addEventListener('change', function() {
+                                          lang = this.value;
+                                          loadToolbar();
+                                        });
+                                        /************************************************
+                                         * 5) Editor Logic
+                                         ***********************************************/
+                                        const editorDiv = document.getElementById('editor');
+                                        let savedRange = null;
+                                        // Track selection for potential re-application
+                                        document.addEventListener('selectionchange', function() {
+                                          const sel = window.getSelection();
+                                          if (sel.rangeCount > 0) {
+                                            const range = sel.getRangeAt(0);
+                                            if (editorDiv.contains(range.startContainer)) {
+                                              savedRange = range.cloneRange();
+                                            }
+                                          }
+                                        });
 
-  // Simply assign the template string directly to srcdoc
-  document.getElementById('toolbar').srcdoc = toolbarHTML;
-}
-    loadToolbar();
+                                        function execCmd(command) {
+                                          editorDiv.focus();
+                                          document.execCommand(command, false, null);
+                                        }
 
-    // Change language at runtime
-    document.getElementById('languageSelect').addEventListener('change', function() {
-      lang = this.value;
-      loadToolbar();
-    });
+                                        function changeFont(fontName) {
+                                          if (!fontName) return;
+                                          editorDiv.focus();
+                                          let sel = window.getSelection();
+                                          if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+                                            if (savedRange) {
+                                              sel = window.getSelection();
+                                              sel.removeAllRanges();
+                                              sel.addRange(savedRange.cloneRange());
+                                            }
+                                          }
+                                          if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+                                            const range = sel.getRangeAt(0);
+                                            const span = document.createElement("span");
+                                            span.style.fontFamily = fontName;
+                                            span.appendChild(range.extractContents());
+                                            range.insertNode(span);
+                                            sel.removeAllRanges();
+                                            const newRange = document.createRange();
+                                            newRange.selectNodeContents(span);
+                                            sel.addRange(newRange);
+                                          } else {
+                                            // Fallback to execCommand fontName
+                                            document.execCommand("fontName", false, fontName);
+                                          }
+                                        }
 
-    /************************************************
-     * 5) Editor Logic
-     ***********************************************/
-    const editorDiv = document.getElementById('editor');
-    let savedRange = null;
+                                        function applyMoreOption(optionValue) {
+                                          editorDiv.focus();
+                                          switch (optionValue) {
+                                            case "h1":
+                                              document.execCommand('formatBlock', false, 'H1');
+                                              break;
+                                            case "h2":
+                                              document.execCommand('formatBlock', false, 'H2');
+                                              break;
+                                            case "h3":
+                                              document.execCommand('formatBlock', false, 'H3');
+                                              break;
+                                            case "blockquote":
+                                              document.execCommand('formatBlock', false, 'BLOCKQUOTE');
+                                              break;
+                                            case "hr":
+                                              document.execCommand('insertHorizontalRule');
+                                              break;
+                                            case "p": {
+                                              editorDiv.focus();
+                                              const selection = window.getSelection();
+                                              if (!selection.rangeCount) return;
+                                              // Insert a new 
+                                              < p > after the current block node, then move the cursor there
+                                              const range = selection.getRangeAt(0);
+                                              // 1) Find the block parent (e.g. 
+                                              < blockquote > )
+                                            let block = range.startContainer;
+                                            while (block && block !== editorDiv && !/^(P|BLOCKQUOTE|H[1-6]|DIV|LI)$/.test(block.nodeName)) {
+                                              block = block.parentNode;
+                                            }
+                                            // 2) Create a new paragraph
+                                            const newParagraph = document.createElement('p');
+                                            newParagraph.innerHTML = ' < br > '; // so it’s not empty
+                                            // 3) Insert newParagraph after the current block
+                                            if (block && block.parentNode) {
+                                              if (block.nextSibling) {
+                                                block.parentNode.insertBefore(newParagraph, block.nextSibling);
+                                              } else {
+                                                block.parentNode.appendChild(newParagraph);
+                                              }
+                                            } else {
+                                              // Fallback: just append it
+                                              editorDiv.appendChild(newParagraph);
+                                            }
+                                            // 4) Place the caret inside the new paragraph
+                                            const newRange = document.createRange();
+                                            newRange.setStart(newParagraph, 0);
+                                            newRange.collapse(true);
+                                            selection.removeAllRanges();
+                                            selection.addRange(newRange);
+                                            break;
+                                          }
+                                          case "inlineCode": {
+                                            let sel = window.getSelection();
+                                            if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+                                              const range = sel.getRangeAt(0);
+                                              const code = document.createElement("code");
+                                              code.appendChild(range.extractContents());
+                                              range.insertNode(code);
+                                              sel.removeAllRanges();
+                                              const newRange = document.createRange();
+                                              newRange.selectNodeContents(code);
+                                              sel.addRange(newRange);
+                                            } else {
+                                              document.execCommand('insertHTML', false, ' < code > < /code>');
+                                              }
+                                              break;
+                                            }
+                                            case "codeBlock": {
+                                              let sel = window.getSelection();
+                                              if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+                                                const range = sel.getRangeAt(0);
+                                                const pre = document.createElement("pre");
+                                                const code = document.createElement("code");
+                                                code.appendChild(range.extractContents());
+                                                pre.appendChild(code);
+                                                range.insertNode(pre);
+                                                sel.removeAllRanges();
+                                                const newRange = document.createRange();
+                                                newRange.selectNodeContents(pre);
+                                                sel.addRange(newRange);
+                                              } else {
+                                                document.execCommand('insertHTML', false, ' < pre > < code > < /code> < /pre>');
+                                                }
+                                                break;
+                                              }
+                                              case "link": {
+                                                let url = prompt("Enter the URL", "http://");
+                                                if (url) {
+                                                  document.execCommand('createLink', false, url);
+                                                }
+                                                break;
+                                              }
+                                              default: break;
+                                            }
+                                          }
+                                          /************************************************
+                                           * 6) Saving & Opening Files
+                                           ***********************************************/
+                                          function saveText() {
+                                            // Convert the current editor HTML to .md
+                                            const editorContent = editorDiv.innerHTML;
+                                            const markdownText = htmlToMarkdown(editorContent);
+                                            // -- FILE:// PROTOCOL COMPATIBILITY --
+                                            // Instead of using Blob + URL.createObjectURL, use a data URL
+                                            // so that Chrome won't block it from file://
+                                            const dataUrl = "data:text/markdown;charset=utf-8," + encodeURIComponent(markdownText);
+                                            const a = document.createElement('a');
+                                            a.href = dataUrl;
+                                            a.download = 'document.md';
+                                            // Programmatically click the 
+                                            < a > to download
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            document.body.removeChild(a);
+                                          }
 
-    // Track selection for potential re-application
-    document.addEventListener('selectionchange', function() {
-      const sel = window.getSelection();
-      if (sel.rangeCount > 0) {
-        const range = sel.getRangeAt(0);
-        if (editorDiv.contains(range.startContainer)) {
-          savedRange = range.cloneRange();
-        }
-      }
-    });
-
-    function execCmd(command) {
-      editorDiv.focus();
-      document.execCommand(command, false, null);
-    }
-
-    function changeFont(fontName) {
-      if (!fontName) return;
-      editorDiv.focus();
-      let sel = window.getSelection();
-      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        if (savedRange) {
-          sel = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(savedRange.cloneRange());
-        }
-      }
-      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
-        const range = sel.getRangeAt(0);
-        const span = document.createElement("span");
-        span.style.fontFamily = fontName;
-        span.appendChild(range.extractContents());
-        range.insertNode(span);
-        sel.removeAllRanges();
-        const newRange = document.createRange();
-        newRange.selectNodeContents(span);
-        sel.addRange(newRange);
-      } else {
-        // Fallback to execCommand fontName
-        document.execCommand("fontName", false, fontName);
-      }
-    }
-
-    function applyMoreOption(optionValue) {
-      editorDiv.focus();
-      switch(optionValue) {
-        case "h1":
-          document.execCommand('formatBlock', false, 'H1');
-          break;
-        case "h2":
-          document.execCommand('formatBlock', false, 'H2');
-          break;
-        case "h3":
-          document.execCommand('formatBlock', false, 'H3');
-          break;
-        case "blockquote":
-          document.execCommand('formatBlock', false, 'BLOCKQUOTE');
-          break;
-        case "hr":
-          document.execCommand('insertHorizontalRule');
-          break;
-	   	case "p": {
-  editorDiv.focus();
-
-  const selection = window.getSelection();
-  if (!selection.rangeCount) return;
-
-  // Insert a new <p> after the current block node, then move the cursor there
-  const range = selection.getRangeAt(0);
-
-  // 1) Find the block parent (e.g. <blockquote>)
-  let block = range.startContainer;
-  while (block && block !== editorDiv && !/^(P|BLOCKQUOTE|H[1-6]|DIV|LI)$/.test(block.nodeName)) {
-    block = block.parentNode;
-  }
-
-  // 2) Create a new paragraph
-  const newParagraph = document.createElement('p');
-  newParagraph.innerHTML = '<br>'; // so it’s not empty
-
-  // 3) Insert newParagraph after the current block
-  if (block && block.parentNode) {
-    if (block.nextSibling) {
-      block.parentNode.insertBefore(newParagraph, block.nextSibling);
-    } else {
-      block.parentNode.appendChild(newParagraph);
-    }
-  } else {
-    // Fallback: just append it
-    editorDiv.appendChild(newParagraph);
-  }
-
-  // 4) Place the caret inside the new paragraph
-  const newRange = document.createRange();
-  newRange.setStart(newParagraph, 0);
-  newRange.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(newRange);
-
-  break;
-}
-
-        case "inlineCode": {
-          let sel = window.getSelection();
-          if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
-            const range = sel.getRangeAt(0);
-            const code = document.createElement("code");
-            code.appendChild(range.extractContents());
-            range.insertNode(code);
-            sel.removeAllRanges();
-            const newRange = document.createRange();
-            newRange.selectNodeContents(code);
-            sel.addRange(newRange);
-          } else {
-            document.execCommand('insertHTML', false, '<code></code>');
-          }
-          break;
-        }
-        case "codeBlock": {
-          let sel = window.getSelection();
-          if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
-            const range = sel.getRangeAt(0);
-            const pre = document.createElement("pre");
-            const code = document.createElement("code");
-            code.appendChild(range.extractContents());
-            pre.appendChild(code);
-            range.insertNode(pre);
-            sel.removeAllRanges();
-            const newRange = document.createRange();
-            newRange.selectNodeContents(pre);
-            sel.addRange(newRange);
-          } else {
-            document.execCommand('insertHTML', false, '<pre><code></code></pre>');
-          }
-          break;
-        }
-        case "link": {
-          let url = prompt("Enter the URL", "http://");
-          if (url) {
-            document.execCommand('createLink', false, url);
-          }
-          break;
-        }
-        default:
-          break;
-      }
-    }
-
-    /************************************************
-     * 6) Saving & Opening Files
-     ***********************************************/
-    function saveText() {
-      // Convert the current editor HTML to .md
-      const editorContent = editorDiv.innerHTML;
-      const markdownText = htmlToMarkdown(editorContent);
-
-      // -- FILE:// PROTOCOL COMPATIBILITY --
-      // Instead of using Blob + URL.createObjectURL, use a data URL
-      // so that Chrome won't block it from file://
-      const dataUrl = "data:text/markdown;charset=utf-8," + encodeURIComponent(markdownText);
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = 'document.md';
-
-      // Programmatically click the <a> to download
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }
-
-    function openFile(event) {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        if (file.name.toLowerCase().endsWith('.md')) {
-          // Convert .md to WYSIWYG-friendly HTML
-          const markdownText = e.target.result;
-          const htmlContent = extendedMarkdownToHtml(markdownText);
-          editorDiv.innerHTML = htmlContent;
-        } else {
-          // If not .md, just load raw text/HTML
-          editorDiv.innerHTML = e.target.result;
-        }
-      };
-      reader.readAsText(file);
-    }
-
-    /************************************************
-     * 7) Printing
-     ***********************************************/
-    function printDocument() {
-      const printContent = editorDiv.innerHTML;
-      const printWindow = window.open('', '', 'width=800,height=600');
-      printWindow.document.write('<html><head><title>Print</title></head><body>' + printContent + '</body></html>');
-      printWindow.document.close();
-      printWindow.print();
-    }
-
-    // Expose functions for the toolbar iframe to call:
-    window.execCmd = execCmd;
-    window.changeFont = changeFont;
-    window.applyMoreOption = applyMoreOption;
-    window.saveText = saveText;
-    window.openFile = openFile;
-    window.printDocument = printDocument;
-    window.htmlToMarkdown = htmlToMarkdown;
-    window.markdownToHtml = markdownToHtml;
-  </script>
-</body>
+                                          function openFile(event) {
+                                            const file = event.target.files[0];
+                                            if (!file) return;
+                                            const reader = new FileReader();
+                                            reader.onload = function(e) {
+                                              if (file.name.toLowerCase().endsWith('.md')) {
+                                                // Convert .md to WYSIWYG-friendly HTML
+                                                const markdownText = e.target.result;
+                                                const htmlContent = extendedMarkdownToHtml(markdownText);
+                                                editorDiv.innerHTML = htmlContent;
+                                              } else {
+                                                // If not .md, just load raw text/HTML
+                                                editorDiv.innerHTML = e.target.result;
+                                              }
+                                            };
+                                            reader.readAsText(file);
+                                          }
+                                          /************************************************
+                                           * 7) Printing
+                                           ***********************************************/
+                                          function printDocument() {
+                                            const printContent = editorDiv.innerHTML;
+                                            const printWindow = window.open('', '', 'width=800,height=600');
+                                            printWindow.document.write(' < html > < head > < title > Print < /title> < /head> < body > ' + printContent + ' < /body> < /html>');
+                                              printWindow.document.close(); printWindow.print();
+                                            }
+                                            // Expose functions for the toolbar iframe to call:
+                                            window.execCmd = execCmd;
+                                            window.changeFont = changeFont;
+                                            window.applyMoreOption = applyMoreOption;
+                                            window.saveText = saveText;
+                                            window.openFile = openFile;
+                                            window.printDocument = printDocument;
+                                            window.htmlToMarkdown = htmlToMarkdown;
+                                            window.markdownToHtml = markdownToHtml;
+    </script>
+  </body>
 </html>
