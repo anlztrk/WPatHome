@@ -25,7 +25,7 @@
     /* Toolbar iframe */
     #toolbar {
       width: 100%;
-      height: 60px;
+      height: 80px; /* Increased height to accommodate two rows */
       border: none;
       position: fixed;
       top: 0;
@@ -44,7 +44,7 @@
       padding: 10px;
       overflow-y: auto;
       text-align: left;
-      margin: 70px auto 0;
+      margin: 90px auto 0; /* Adjust margin to leave room for the taller toolbar */
       font-family: serif; /* Use a serif font inside the editor */
     }
   </style>
@@ -471,6 +471,13 @@
           background: white;
           overflow: hidden;
         }
+        .toolbar-row {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          flex-wrap: wrap;
+          margin-bottom: 3px;
+        }
         button, select, input {
           margin: 3px;
           padding: 5px;
@@ -480,48 +487,45 @@
       </style>
     </head>
     <body>
-      <!-- Font selection -->
-      <select id="fontPicker" onchange="parent.changeFont(this.value)">
-        <option value="">${t.pickFont}</option>
-        <option value="Arial">${t.fontOptions.arial}</option>
-        <option value="Courier New">${t.fontOptions.courier}</option>
-        <option value="Times New Roman">${t.fontOptions.times}</option>
-      </select>
-      <input
-        type="text"
-        id="customFont"
-        placeholder="${t.customFontPlaceholder}"
-        onkeydown="if(event.key === 'Enter'){ event.preventDefault(); parent.changeFont(this.value); }"
-      >
-      <!-- Formatting buttons -->
-      <button onclick="parent.execCmd('bold')"><strong>${t.bold}</strong></button>
-      <button onclick="parent.execCmd('italic')"><em>${t.italic}</em></button>
-      <button onclick="parent.execCmd('underline')"><u>${t.underline}</u></button>
-      <button onclick="parent.execCmd('justifyLeft')">${t.left}</button>
-      <button onclick="parent.execCmd('justifyCenter')">${t.center}</button>
-      <button onclick="parent.execCmd('justifyRight')">${t.right}</button>
-      <button onclick="parent.execCmd('insertOrderedList')">${t.numberedList}</button>
-      <button onclick="parent.execCmd('insertUnorderedList')">${t.bulletList}</button>
-      <input type="file" id="fileInput" accept=".md" onchange="parent.openFile(event)">
-      <!-- Dropdown for additional features -->
-      <select id="moreOptions" onchange="parent.applyMoreOption(this.value); this.selectedIndex=0;">
-        <option value="">${t.more}</option>
-        <option value="p">${t.normaltext}</option>
-        <option value="h1">${t.heading1}</option>
-        <option value="h2">${t.heading2}</option>
-        <option value="h3">${t.heading3}</option>
-        <option value="blockquote">${t.blockquote}</option>
-        <option value="hr">${t.hr}</option>
-        <option value="inlineCode">${t.inlineCode}</option>
-        <option value="codeBlock">${t.codeBlock}</option>
-        <option value="link">${t.link}</option>
-      </select>
-      <button onclick="parent.saveText()">${t.save}</button>
-      <button onclick="parent.printDocument()">${t.print}</button>
+      <div class="toolbar-row">
+        <!-- First row: Font selection and basic formatting buttons -->
+        <select id="fontPicker" onchange="parent.changeFont(this.value)">
+          <option value="">${t.pickFont}</option>
+          <option value="Arial">${t.fontOptions.arial}</option>
+          <option value="Courier New">${t.fontOptions.courier}</option>
+          <option value="Times New Roman">${t.fontOptions.times}</option>
+        </select>
+        <input type="text" id="customFont" placeholder="${t.customFontPlaceholder}" onkeydown="if(event.key === 'Enter'){ event.preventDefault(); parent.changeFont(this.value); }">
+        <button onclick="parent.execCmd('bold')"><strong>${t.bold}</strong></button>
+        <button onclick="parent.execCmd('italic')"><em>${t.italic}</em></button>
+        <button onclick="parent.execCmd('underline')"><u>${t.underline}</u></button>
+        <button onclick="parent.execCmd('justifyLeft')">${t.left}</button>
+        <button onclick="parent.execCmd('justifyCenter')">${t.center}</button>
+        <button onclick="parent.execCmd('justifyRight')">${t.right}</button>
+        <button onclick="parent.execCmd('insertOrderedList')">${t.numberedList}</button>
+        <button onclick="parent.execCmd('insertUnorderedList')">${t.bulletList}</button>
+      </div>
+      <div class="toolbar-row">
+        <!-- Second row: File input, additional features, and save/print -->
+        <input type="file" id="fileInput" accept=".md" onchange="parent.openFile(event)">
+        <select id="moreOptions" onchange="parent.applyMoreOption(this.value); this.selectedIndex=0;">
+          <option value="">${t.more}</option>
+          <option value="p">${t.normaltext}</option>
+          <option value="h1">${t.heading1}</option>
+          <option value="h2">${t.heading2}</option>
+          <option value="h3">${t.heading3}</option>
+          <option value="blockquote">${t.blockquote}</option>
+          <option value="hr">${t.hr}</option>
+          <option value="inlineCode">${t.inlineCode}</option>
+          <option value="codeBlock">${t.codeBlock}</option>
+          <option value="link">${t.link}</option>
+        </select>
+        <button onclick="parent.saveText()">${t.save}</button>
+        <button onclick="parent.printDocument()">${t.print}</button>
+      </div>
     </body>
     </html>
   `;
-      // Simply assign the template string directly to srcdoc
       document.getElementById('toolbar').srcdoc = toolbarHTML;
     }
     loadToolbar();
